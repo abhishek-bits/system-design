@@ -1,6 +1,6 @@
 # System Design
 
-## Basics
+## Basics / Prerequisites
 
 - [System Design Basics](https://www.youtube.com/watch?v=xpDnVSmNFX0&list=PLMCXHnjXnTnvo6alSjVkgxV-VH6EPyvoX)
 
@@ -206,3 +206,84 @@ Limitations:
 This long term solution along with the Timer Wheel is good enough for all the external requests. But what about internal requests? What if Service 1 wants to talk to Service 2? This is what we discuss in next section.
 
 #### Partitioning and Real Life Optimizations
+
+Going for an optimistic approach, we can go for a _Service Level Agreement_ with a configuration that it can handle at most N (say 20) requests at a time from the internal services.
+
+The second thing we can do is to **Rate Limit** in the service itself. It is always better to have rate limitting measures in the service itself; so that in worst case scenario, the service will know how to handle any incoming load.
+
+##### But, how do we identify that we are under tremendous load ?
+
+There are few key metrics used to identify this scenario:
+
+- Checking **Average Response Time** If this value goes high, then it either means that the service is down or it is under tremendous load.
+- Checking **Age of messages in queue** If the value goes higher than the usual number, than it means that the server is under tremendous load.
+- **Dead letter queue** It is a concept where all the requests that fails or could not be processed, will be pushed and respective failure messages will be sent to the subscribers of this queue. This is simimar to a _Message Queue_ service like Kafka, RabbitMQ, etc. If the size of the dead letter queue is spiking up, then it means that the service is failing a lot of requests.
+
+These three metrics will tell us if we have a rate limiting problem going on.
+
+##### How do you deal with Bad Actors ?
+
+We have a queue of size 5 (say) and it has some requests in order {1, 2, 3, 4, 5}. Now, the request = 4 is some request from an external user or from a genuine service, while, requests (1,2,3,5) are from a bad actor (say S2). Now, how do we contain the requests from S2 because it's a bad actor.
+
+We'll take the queue and partition it into pieces (# pieces = size of queue) of size 1 and whenever we get a request, we hash this:
+
+                hash(requestId) % 5.
+
+Now, the beauty of such an hash function would be that if a bad actor like S2 sends a request, they all would hash to the same box. So, all requests that S2 sends (1,2,3,5) will all hash into the same box and collide with each other, which means, our genuine requests would process without any issues.
+
+Also, each of these boxes are again FIFO queues in itself and in a real system, the sizes of each such queue will again be much larger. Also, this means that in a real system 20% of the genuine requests would still be affected as they would hash to the same bucket as that which any request from a bad actor would hash.
+
+Now, again, to mitigate such a problem, we can go for even larger # partitions i.e. increase the number of queues we have.
+
+At last, we can also try for a hybrid queue wherein, the queue which is bombarbed by requests from Bad actor can be further divided into sub-queues with each having their own separate hash functions (h2, h3, ...)
+
+In Summary we can:
+
+- Increase the no. of queues.
+- Increase the size of queues.
+- Split the overloaded queues.
+
+Another good application to such a partitioning concept is that we can divide the requests based on the type of tasks that follow. Remember, that the **head of line blocking** also applies over here, if for every queue, the first task is very expensive, then it would be a nightmare for the entire system. Poor performance, Poor response times, in general Poor experiences. So, if we can split the requests into tasks and route them based on the type of task that we are doing is far better. Thus, for example, requests of type T1 can route to Queue1, of type T2 can route to Queue2, and so on making sure that the performance is up to the mark. Also, if one type of task has failed, due to the queue requests been processed by an external service which is down, and this queue becoming completely full, then it does not hinder other requests as the other queues would work fine.
+
+##### Real world optimizations
+
+**1. Request Collapsing**
+
+Suppose there are multiple clients requesting the same resource from the server. Now, we don't want to hammer the server each time for the same request. Caching is the solution.
+
+NOTE: Caching here is assumed to be at the global level (ex. Redis). (The reasoning for global cache was discussed in one of YT videos).
+
+We need to see that whenever we have a cache miss, we can store this request (what was requested from the client):
+
+         Map < AVG_OF_EMP_SAL, Future >
+
+Here, Future (from Java) signifies that when the resources asked have been received (e.g. avg of employee salaries) then only this request will be marked as completed.
+
+NOTE: All this caching has to be done at the _Database Client_.
+
+So, ONE REQUEST and ONE RESPONSE can help us minimizing database queries which are computationally heavy.
+
+**1.1. Request Batching (or Request Condensing)**
+
+Whenever we have a cache miss, we don't hit the backend immediately, we instead wait for few seconds and see if we get any other (not necessary a duplicate) requests, then the database client will condense these requests into a single `SELECT` statement.
+
+In one hand where Request Collapsing is always useful, on the other hand, Request Condensing may or may not be useful as it depends on whether we want our application to process requests in batch or not.
+
+**2. Client Side Rate Limitting**
+
+The goal is to take the responsiblity onto the client side.
+
+1. In case of an error response received from the Server, identify the type of this error response and then proceed further.
+
+- If the error is of type _PERMANENT_, it means that we have a mistake in the request itself. Example, if password is incorrect, then don't retry.
+- If the error is of type _TEMPORARY_, it means that the server had some internal issues, here, we should retry.
+
+2. Don't hammer the server immediately. In some situations, server may be under tremendous load and won't process your request.
+
+The concept of **Exponential Backoff**: When the client sends the first request, and the server responds with a timeout. In that case, the client waits for 2 seconds and sends another request. Again, the server sends a timeout error, then the client will wait for 4 seconds this time before it can send another request. We can have a maximum limit say 10 seconds, this is the maximum the client will wait after which the client will _fail_ the request, giving the server some time to recover.
+
+**Summary**:
+
+- Use a Global service to make sure whether a request should / should not be accepted.
+- Use Global caches to make sure unnecessary request don't always hit the servers.
+- Use _Timer Wheel_ (which are a variation of Token Buckets) which will limit the rate of requests falling into our server at any given point of time.
