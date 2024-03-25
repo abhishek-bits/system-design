@@ -97,6 +97,222 @@ In summary:
 - If we're unsure of how our application will grow then we should choose a database that we're most familiar with.
 - If we have enough idea of how the application works currenly, we choose the database that gives us the best trade-offs.
 
+### Consistency in Distributed Systems
+
+#### What is Data Consistency ?
+
+Consistency is a **measure** of how **UP TO DATE** the data in a _distributed system_ is.
+
+Two terms:
+
+- **String Consistency** when the data we fetch reflects all the updates done on this piece of data.
+- **Weak Consistency** when the data we fetch, is actually stale (old), without or with partially complete recent updates.
+
+**Why is consistency important ?**
+
+1. Strongly consistent system are **easier to understand** because all of the updates are reflected in all of the data in the system.
+2. **User Experience** Users appreciate their changes being reflected (e.g. liking a post).
+
+As an engineer, it is our responsibility to make our system as consistent as possible.
+
+#### Levels of Data Consistency
+
+##### Linearizable Consistency
+
+This is the highest level of consistency.
+
+A Read operation will result in the **MOST UP TO DATE** data.
+
+Although life is not so simple, and Linearizable Consistency has its own drawbacks.
+
+But, **How can we reach such a high level of consistency ?**
+
+Concept of FCFS, i.e. to **force ordering** in all the requests received. This guarantees that every request will be processed in sequence.
+
+**Head of Line Blocking**: One of the requests could be a complex one and will therefore take reasonably more time to get executed. This is where the system stops responding and is therefore a **single point of failure**.
+
+So two issues arise:
+
+1. **High Latency** (Latency here means the time taken to process requests successfully starting from the time they had to wait in the queue to get processed) The wait times of each request could be so high that the overall latency of the system is increasing.
+
+2. **Low Availability** (Availability here means the chance for a server to be able to respond to a request). It is possible for a request to never reach the server for process as it would always be stuck in queue. Hence, it will be assumed that the system is dead and such a system is called an unavailable system.
+
+**Implementation**:
+
+1. **Single Thread** A single threaded application would ensure that all request process in-order.
+2. **RAFT protocol** ensures that ordering is maintained accross the distributed system.
+
+##### Eventual Consistency
+
+Consider a scenario where the following order of requests arrive in the system:
+
+1. `write(1, 21)`
+2. `read(1)`
+
+Now, in a distributed scenario where there could be multiple services listening to the requests or the database itself could be multi-node to handle operations in parallel. Hence, there is a possibility that the read request could get executed first before the write request. This means that there exists Out-of-Order requests.
+
+While this could be a problem in some applications but in some other applications this turns out to be perfectly fine.
+
+_Example_: Gmail. As we sent an email, it may be visible in Outbox for sometime but we are assured that it will be delivered.
+
+##### Causal Consistency
+
+Causal Consistency is about _Cause_ and _Effect_.
+
+Consider the below list of operations:
+
+1. `read(1)`
+2. `write(2, 7)`
+3. `read(2)`
+4. `write(1, 31)`
+5. `read(2)`
+6. `write(2, 17)`
+7. `read(1)`
+
+Let's say we are a client with ID = 1, and we are concerned with only the operations with ID = 1. Now, if initial value of 1 is 21 (say) then for Req #1 and Req #7, the response that we are expecting is 21 and 31 respectively.
+
+But, if we apply Linearizable Consistency here, than Req #7 will be blocked due to all possible requests before it. Irrelevant Reqs. #2, #3, #5, #6 will be blocking Req #7. This is wastage of resources. Not only that, what if Req. #5 or Req #6 fails, than Req #7 will be blocked due to a cause which has no relevance to it.
+
+**Soultion**:
+
+Extract the requests which are associated with the same key but in that same order.
+
+| #1             | #2             |
+| -------------- | -------------- |
+| `read(1)`      | `write(2, 7)`  |
+| `write(1, 31)` | `read(2)`      |
+| `read(1)`      | `read(2)`      |
+|                | `write(2, 17)` |
+
+Let's say thread #1 takes a global lock on key 1:
+
+- Even if `write(1, 31)` comes at the same time as `read(1)`, it will be blocked.
+- All the following operations will hold and release the lock in that order.
+
+This is Causal Consistency. If we are somehow related to an operation before us, than those operations have to be executed before you. In short, _After there is **Cause** there is **Effect**_.
+
+What if even thread #2 takes a global lock on Key 2:
+
+- If `read(2)`, `read(2)` and `write(2, 17)` concurrenlty find for the lock and say `write(2, 17)` gets the lock first, then `read(7)` and `read(7)` would show 17 instead of 7.
+
+Only, if all of them get the lock sequentially then its fine otherwise we have a problem.
+
+Thus, in Causal Consistency we focus on **Ordering rather than Locking**.
+
+**Summary**:
+
+- Causal consistency is a higher level consistency than Eventual Consistency because here we are guaranteed than all requests on same key will be executed sequentially.
+- It is more efficient than Linearizable consistency because here we are not waiting for all the operations to execute before the current operation. We are basically waiting only for a subset of operations over the same key before executing the current operation.
+
+**Drawback**:
+
+What is the drawback of Causal Consistency ?
+
+Problem arises in the case of aggregated queries. Suppose all read requests are replaced with `sum`.
+
+- `sum`
+- `write(2, 7)`
+- `sum`
+- `write(1, 31)`
+- `sum`
+- `write(2, 17)`
+- `sum`
+
+Then according to causal consistency, we'll do as follows:
+
+| #1  | #2           | #3           |
+| --- | ------------ | ------------ |
+| sum | write(2, 7)  | write(1, 31) |
+| sum | write(2, 17) |              |
+| sum |              |              |
+| sum |              |              |
+
+Now, all these three threads will be executed parallely and all the operations assigned to them will happen sequentially. But multiple cases may arise:
+
+- Either all `sum` execute before `write(2, 7)` and before `write(1, 31)`
+- Either all `sum` execute before `write(2, 17)` but after `write(1, 31)`
+- Few `sum` operations executed after `write(2, 7)`, few after `write(1, 31)`.
+- and so on...
+
+So, we can conclude that, these operations will give different responses based on different permutations of execution.
+
+Moreover, if the aggregate operations are based on certain range `sum(1, 2)` (say), then we'll have problems in causal ordering. Since aggregation functions use multiple keys, they cannot be ordered by a single key.
+
+This issue is solved by the next consistency model.
+
+##### Quorum
+
+In this consistency, we have multiple replicas (or nodes) of the database and these replicas need not be consistent with each other. All these replicates will be queried in parallel for a READ request.
+
+```mermaid
+flowchart LR
+A[Database] --> B[Replica #1]
+A --> C[Replica #2]
+A --> D[Replica #3]
+A --> E[...]
+```
+
+Let's say:
+
+| ID  | Replica #1 Data | Replica #2 Data | Replica #3 Data |
+| --- | --------------- | --------------- | --------------- |
+| 1   | 10              | 10              | 10              |
+| 2   | 20              | 20              | 20              |
+| 3   | 30              | 30              | 30              |
+| 4   | 40              | 50              | 40              |
+
+So, how will a READ query work here?
+
+Let's say we got a read query for Key #4 then, the database will query all these replicas and ask for values: (40, 50, 40) in this case. Here we can:
+
+- Take the majority value (40 in this case).
+- Take the value with the most recent timestamp (50 in this case).
+- and so on...
+
+So, there is some sort of _Concensus_ in a Distributed System through Quorum.
+
+Now, why is this **Eventually Consistent** (in most cases)?
+
+Every request should follow the Rule: `R + W <= N`
+
+Let's Replica #2 after executing `write(4, 50)` crashed and then the read query for all three replicas resulted in (40, 40) as the second replica didn't respond. Finally, the reponse will be recorded as 40 (instead of 50).
+
+Can we make this system a **Strongly Consistent** system ?
+
+How many replicas do we have (N) = 3
+How many minimum nodes do we need to write to? (W) = 1
+How many read nodes are we left with? (R) = 2
+
+Every request should follow the Rule: `R + W > N`.
+
+So, according to this rule, R > 2 but in our response we get (40, 40); Hence, this entire request fails and system responds with an error (503).
+
+Not only this, in a system that follows such formula, we can change the # write copies that we have.
+
+Let's say: R = 2, W = 2 and still R + W > 3. This simply means that at least two copies have to have the latest data. Now, for a read request even if one of them crashes, either of the other two would still have the latest data.
+
+Depending on the level of Quorum chosen, we will get
+
+- **More Efficiency** if we go for an Eventually consistent system.
+- **Fault Tolerance** if we go for a Strongly consistent system.
+
+In short, Quorum gives us the power to have a customized balance in consistency and efficiency of the system.
+
+**Drawbacks**:
+
+- Quorum needs to have multiple nodes (or replicas).
+- If we have even number of replicas then there is a chance of **SPLIT BRAIN** problem.
+- High Cost.
+
+#### Data Consistency Level Tradeoffs
+
+| Level        | Consistency | Efficiency                                                                  |
+| ------------ | ----------- | --------------------------------------------------------------------------- |
+| Linearizable | Highest     | Lowest (Due to Head-of-Line blocking)                                       |
+| Eventual     | Lowest      | Highest (We don't have to worry about the order of Read / Write operations) |
+| Causal       | High        | Mostly High (Thread based)                                                  |
+| Quorum       | Configuable | Configurable                                                                |
+
 ### Distributed Rate Limitting
 
 #### The Oracle and the Timer Wheel
