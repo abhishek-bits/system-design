@@ -105,7 +105,7 @@ Consistency is a **measure** of how **UP TO DATE** the data in a _distributed sy
 
 Two terms:
 
-- **String Consistency** when the data we fetch reflects all the updates done on this piece of data.
+- **Strong Consistency** when the data we fetch reflects all the updates done on this piece of data.
 - **Weak Consistency** when the data we fetch, is actually stale (old), without or with partially complete recent updates.
 
 **Why is consistency important ?**
@@ -119,7 +119,7 @@ As an engineer, it is our responsibility to make our system as consistent as pos
 
 ##### Linearizable Consistency
 
-This is the highest level of consistency.
+This is the **highest level of consistency**.
 
 A Read operation will result in the **MOST UP TO DATE** data.
 
@@ -135,7 +135,7 @@ So two issues arise:
 
 1. **High Latency** (Latency here means the time taken to process requests successfully starting from the time they had to wait in the queue to get processed) The wait times of each request could be so high that the overall latency of the system is increasing.
 
-2. **Low Availability** (Availability here means the chance for a server to be able to respond to a request). It is possible for a request to never reach the server for process as it would always be stuck in queue. Hence, it will be assumed that the system is dead and such a system is called an unavailable system.
+2. **Low Availability** (Availability here means the chance for a server to be able to respond to a request). It is possible for a request to never reach the server for processing as it would always be stuck in the queue. Hence, it will be assumed that the system is dead and such a system is called an unavailable system.
 
 **Implementation**:
 
@@ -149,7 +149,7 @@ Consider a scenario where the following order of requests arrive in the system:
 1. `write(1, 21)`
 2. `read(1)`
 
-Now, in a distributed scenario where there could be multiple services listening to the requests or the database itself could be multi-node to handle operations in parallel. Hence, there is a possibility that the read request could get executed first before the write request. This means that there exists Out-of-Order requests.
+Now, in a **distributed scenario** where there could be multiple services listening to the requests or the database itself could be multi-node to handle operations in parallel. Hence, _there is a possibility that the read request could get executed first before the write request_. This means that there exists **Out-of-Order** requests.
 
 While this could be a problem in some applications but in some other applications this turns out to be perfectly fine.
 
@@ -171,7 +171,10 @@ Consider the below list of operations:
 
 Let's say we are a client with ID = 1, and we are concerned with only the operations with ID = 1. Now, if initial value of 1 is 21 (say) then for Req #1 and Req #7, the response that we are expecting is 21 and 31 respectively.
 
-But, if we apply Linearizable Consistency here, than Req #7 will be blocked due to all possible requests before it. Irrelevant Reqs. #2, #3, #5, #6 will be blocking Req #7. This is wastage of resources. Not only that, what if Req. #5 or Req #6 fails, than Req #7 will be blocked due to a cause which has no relevance to it.
+But, if we apply Linearizable Consistency here, then:
+
+- Req #7 will be blocked due to all possible requests before it. Irrelevant Reqs. #2, #3, #5, #6 will be blocking Req #7. This is wastage of resources.
+- Not only that, what if Req. #5 or Req #6 fails, than Req #7 will be blocked due to a cause which has no relevance to it.
 
 **Soultion**:
 
@@ -189,7 +192,9 @@ Let's say thread #1 takes a global lock on key 1:
 - Even if `write(1, 31)` comes at the same time as `read(1)`, it will be blocked.
 - All the following operations will hold and release the lock in that order.
 
-This is Causal Consistency. If we are somehow related to an operation before us, than those operations have to be executed before you. In short, _After there is **Cause** there is **Effect**_.
+This is Causal Consistency. If we are somehow related to an operation before us, than those operations have to be executed before us. In short, _After there is **Cause** there is **Effect**_.
+
+**Limitation**:
 
 What if even thread #2 takes a global lock on Key 2:
 
@@ -208,7 +213,7 @@ Thus, in Causal Consistency we focus on **Ordering rather than Locking**.
 
 What is the drawback of Causal Consistency ?
 
-Problem arises in the case of aggregated queries. Suppose all read requests are replaced with `sum`.
+Problem arises in the case of **aggregated queries**. Suppose all read requests are replaced with `sum`.
 
 - `sum`
 - `write(2, 7)`
@@ -234,7 +239,7 @@ Now, all these three threads will be executed parallely and all the operations a
 - Few `sum` operations executed after `write(2, 7)`, few after `write(1, 31)`.
 - and so on...
 
-So, we can conclude that, these operations will give different responses based on different permutations of execution.
+So, we can conclude that, _these operations will give different responses based on different permutations of execution_.
 
 Moreover, if the aggregate operations are based on certain range `sum(1, 2)` (say), then we'll have problems in causal ordering. Since aggregation functions use multiple keys, they cannot be ordered by a single key.
 
@@ -242,7 +247,7 @@ This issue is solved by the next consistency model.
 
 ##### Quorum
 
-In this consistency, we have multiple replicas (or nodes) of the database and these replicas need not be consistent with each other. All these replicates will be queried in parallel for a READ request.
+In this consistency, we have _multiple replicas (or nodes) of the database and these replicas need not be consistent with each other_. All these replicas will be queried in parallel for a READ request.
 
 ```mermaid
 flowchart LR
@@ -275,7 +280,7 @@ Now, why is this **Eventually Consistent** (in most cases)?
 
 Every request should follow the Rule: `R + W <= N`
 
-Let's Replica #2 after executing `write(4, 50)` crashed and then the read query for all three replicas resulted in (40, 40) as the second replica didn't respond. Finally, the reponse will be recorded as 40 (instead of 50).
+Let's assume that Replica #2 after executing `write(4, 50)` crashed and then the read query for all three replicas resulted in (40, 40) as the second replica didn't respond. Finally, the reponse will be recorded as 40 (instead of 50).
 
 Can we make this system a **Strongly Consistent** system ?
 
@@ -284,6 +289,8 @@ How many minimum nodes do we need to write to? (W) = 1
 How many read nodes are we left with? (R) = 2
 
 Every request should follow the Rule: `R + W > N`.
+
+where, R is the # Read Replicas, W is the # Write Replicas and N is the total # replicas.
 
 So, according to this rule, R > 2 but in our response we get (40, 40); Hence, this entire request fails and system responds with an error (503).
 
@@ -301,7 +308,7 @@ In short, Quorum gives us the power to have a customized balance in consistency 
 **Drawbacks**:
 
 - Quorum needs to have multiple nodes (or replicas).
-- If we have even number of replicas then there is a chance of **SPLIT BRAIN** problem.
+- If we have even number of replicas then there is a chance of **SPLIT BRAIN** probllem.
 - High Cost.
 
 #### Data Consistency Level Tradeoffs
@@ -312,6 +319,111 @@ In short, Quorum gives us the power to have a customized balance in consistency 
 | Eventual     | Lowest      | Highest (We don't have to worry about the order of Read / Write operations) |
 | Causal       | High        | Mostly High (Thread based)                                                  |
 | Quorum       | Configuable | Configurable                                                                |
+
+#### Transaction Isolation Levels
+
+As a database, what are the read guarantees you can give when two transactions are occuring on the same DB concurrently ?
+
+Isolation Levels are specifically meant for Transactions. How the data behaves when multiple transactions are run simultaneously.
+
+##### Read Uncommitted
+
+- Even uncommited data can be read by concurrent transactions.
+- Useful when we are trading up the system for **Higher Efficiency**.
+
+- Implementation Approaches:
+  - Maintain a single copy of data and _Read_ is on the latest copy of the data.
+
+**Practical Example**: No. of likes in a post.
+
+**Advantage**:
+
+- **Fast** as we don't have any kind of read contentions or write contentions.
+
+**Drawback**:
+
+- If one of transaction rolls back then the updated _Read_ value by other transactions will be counted as invalid.
+
+##### Read Committed
+
+- Solves the drawback of Read Uncommitted isolation level.
+- This isolation level lets us read only committed pieces of data in our database.
+- Every executing transaction will maintain a copy of its own writes; Only when the commit operation is fired, then only these changes will be persisted into the database.
+- This is basically a high level of isolation compared to reading uncommitted data. Such high level of isolations are generally slower and more expensive but in some cases useful.
+- Useful when we are trading up the system for a higher isolation level for a lower efficiency.
+
+**Practical Example**: Movie Theatre Booking
+
+Suppose there are a total of 50 seats, on every booking we are incrementing the count of tickets by 1 and as soon as the counter reaches 50 we want the bookings to stop. But we should stop only when there are 50 committed transactions.
+
+##### Repeatable Read
+
+- When we allow transactions to execute concurrently, there is a chance that consequtive read operations over the same key may give different values.
+- This isolation level is not completely efficient with Read Committed transactions.
+
+**Example**:
+
+| Id  | Value |
+| --- | ----- |
+| 1   | 12    |
+| 2   | 17    |
+
+| T1             | T2             |
+| -------------- | -------------- |
+| `read(2)`      | `read(2)`      |
+| `write(2, 50)` | `write(1, 50)` |
+| `read(1)`      | `read(2)`      |
+| `commit`       | `read(2)`      |
+| `commit`       |
+
+Suppose, T2 executes first and performs `read(2)`, `write(1, 50)` (at its own copy) and `read(2)`. Then T1 executes completely and commits changes. Now, T2 executes again and executes `read(2)` again. The problem here is that the value is read as 17 and 50 respectively.
+
+So, two consequtive operations over the same key gave different values.
+
+There is some sort of _Decision Making_ based on one particular id and repeated reads of the same key are giving us different values so our decision making maybe messed up.
+
+**Implementation**:
+
+In the case of **Read-Committed** isolation level, we are taking a committed value but **not the latest committed value**.
+
+Now, In the case of **Repeatable Read** isolation level, we are **not taking latest committed values** to get more efficiency in repeatable reads. But, this isolation level still ensures that committed values are considered. Thus, it follows _Snapshot Isolation_ which states: At the start of the transaction we want to have a snapshot (or a copy) of the database to keep a note of local writes.
+
+Repeatable Read isolation level follows **Optimistic Concurrency Control** which states that if two transactions concurrently change the value of the same key, then one of the transactions have to be rolled back. For this, we may go for FCFS such that the first transaction to change the value would persist and other will have to be rolled back.
+
+##### Serializable
+
+- Highest level of isolation.
+- Here, for each transaction, every operation is executed in a sequential manner. In other words, it is ensured that an operation from transaction Ti will not interfere with any operation from transaction Tj.
+
+In case of an **aggregated query** say `sum(1, 2)` then all keys between 1 and 2 will have to have a lock on them.
+
+But, if Serializable isolation is so inefficient, when do we even wanna use it ?
+
+Answer: When we don't want _Phantoms_ i.e. consequtive **aggregated queries** would give different results when multiple transactions are running concurrently.
+
+Thus, in such a scenario executing each transaction sequentially will be useful.
+
+##### Isolation Level Implementations
+
+How to implement our own database or we have a system which needs some isolation over the transactions ?
+
+| Isolation Level      | Implementation               | Explaination                                                                                                                                       |
+| -------------------- | ---------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Read Uncommitted** | Single Data Entry            | A single master database is used and the value is overridden at every write operation.                                                             |
+| **Read Committed**   | Local Copy of Changed Values | Every update will be stored at local copy (or cache); Only when `commit` operation is fired, then the changes will be persisted into the database. |
+
+| **Repeatable Read** | Versioning of Unchanged Values | For every key, we'll store all the values that it has ever had in different transaction commits. Example: For a transaction Ti, if the older value of key 'i' is l and some other transaction Tj commits value 17 for key 'i', then for the Transaction Ti, the value of key 'i' should still be 1. Now, if a new Transaction Tk (where k > i, j) arrives and reads the value of key 'i' then it should get 17 now. This is how we ensure that the same value is seen by one transaction repeatedly.
+
+| **Serializable** | Queued Locks | Here, we require some sort of _Causal Consistency_ to make sure that independent transactions do not interfere. For example: `read(1, 2)`, `read(2, 3)` `write(3)` and `read(1, 4)` are all overlapping transactions hence they should be executed in-order. Meanwhile if a new request `read(5, 7)` comes then we should run it in a separate thread.
+
+##### Summary
+
+Isolation Levels by their Order of Efficiency:
+
+1. Read Uncommitted (Best)
+2. Read Committed
+3. Repeatable Read
+4. Serializable (Worst)
 
 ### Distributed Rate Limitting
 
